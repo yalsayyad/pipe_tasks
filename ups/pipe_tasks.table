@@ -1,5 +1,6 @@
 setupRequired(pipe_base)
 setupRequired(pex_config)
+setupRequired(log)
 setupRequired(utils)
 setupRequired(esutil)
 setupOptional(afw)
