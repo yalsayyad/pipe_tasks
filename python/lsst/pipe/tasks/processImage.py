@@ -30,6 +30,11 @@ from lsst.meas.deblender import SourceDeblendTask
 
 class ProcessImageConfig(pexConfig.Config):
     """Config for ProcessImage"""
+    doCalibrate = pexConfig.Field(
+        dtype = bool,
+        default = True,
+        doc = "Perform calibration?",
+    )
     doDetection = pexConfig.Field(
         dtype = bool,
         default = True,

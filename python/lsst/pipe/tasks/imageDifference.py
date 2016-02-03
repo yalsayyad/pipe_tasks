@@ -25,15 +25,13 @@ import numpy
 
 import lsst.pex.config as pexConfig
 import lsst.pipe.base as pipeBase
-import lsst.daf.base as dafBase
 import lsst.afw.geom as afwGeom
 import lsst.afw.math as afwMath
 import lsst.afw.table as afwTable
 import lsst.meas.astrom as measAstrom
-from lsst.meas.base import SingleFrameMeasurementTask
+
 from lsst.pipe.tasks.registerImage import RegisterTask
-from lsst.meas.algorithms import SourceDetectionTask, \
-    starSelectorRegistry, PsfAttributes, SingleGaussianPsf
+from lsst.meas.algorithms import starSelectorRegistry, PsfAttributes, SingleGaussianPsf
 from lsst.ip.diffim import ImagePsfMatchTask, DipoleAnalysis, \
     SourceFlagChecker, KernelCandidateF, cast_KernelCandidateF, makeKernelBasisList, \
     KernelCandidateQa, DiaCatalogSourceSelector, DiaCatalogSourceSelectorConfig, \
@@ -53,31 +51,24 @@ class ImageDifferenceConfig(pexConfig.Config):
         doc="Use image-to-image registration to align template with science image")
     doDebugRegister = pexConfig.Field(dtype=bool, default=False,
         doc="Writing debugging data for doUseRegister")
-    doSelectSources = pexConfig.Field(dtype=bool, default=True,
-        doc="Select stars to use for kernel fitting")
     doSelectDcrCatalog = pexConfig.Field(dtype=bool, default=False,
         doc="Select stars of extreme color as part of the control sample") 
     doSelectVariableCatalog = pexConfig.Field(dtype=bool, default=False,
         doc="Select stars that are variable to be part of the control sample") 
-    doSubtract = pexConfig.Field(dtype=bool, default=True, doc="Compute subtracted exposure?")
     doPreConvolve = pexConfig.Field(dtype=bool, default=True,
         doc="Convolve science image by its PSF before PSF-matching?")
     useGaussianForPreConvolution = pexConfig.Field(dtype=bool, default=True,
         doc="Use a simple gaussian PSF model for pre-convolution (else use fit PSF)? "
             "Ignored if doPreConvolve false.")
-    doDetection = pexConfig.Field(dtype=bool, default=True, doc="Detect sources?")
-    doMerge = pexConfig.Field(dtype=bool, default=True,
-        doc="Merge positive and negative diaSources with grow radius set by growFootprint")
-    doMatchSources = pexConfig.Field(dtype=bool, default=True,
-        doc="Match diaSources with input calexp sources and ref catalog sources")
-    doMeasurement = pexConfig.Field(dtype=bool, default=True, doc="Measure diaSources?")
     doWriteSubtractedExp = pexConfig.Field(dtype=bool, default=True, doc="Write difference exposure?")
     doWriteMatchedExp = pexConfig.Field(dtype=bool, default=False,
         doc="Write warped and PSF-matched template coadd exposure?")
-    doWriteSources = pexConfig.Field(dtype=bool, default=True, doc="Write sources?")
+    doMatchSources = pexConfig.Field(dtype=bool, default=True,
+        doc="Match diaSources with input calexp sources and ref catalog sources")
     doAddMetrics = pexConfig.Field(dtype=bool, default=True,
         doc="Add columns to the source table to hold analysis metrics?")
-
+    doSelectSources = pexConfig.Field(dtype=bool, default=True,
+        doc="Select stars to use for kernel fitting")
     coaddName = pexConfig.Field(
         doc="coadd name: typically one of deep or goodSeeing",
         dtype=str,
@@ -97,14 +88,7 @@ class ImageDifferenceConfig(pexConfig.Config):
         target=ImagePsfMatchTask,
         doc="Warp and PSF match template to exposure, then subtract",
     )
-    detection = pexConfig.ConfigurableField(
-        target=SourceDetectionTask,
-        doc="Low-threshold detection for final measurement",
-    )
-    measurement = pexConfig.ConfigurableField(
-        target=SingleFrameMeasurementTask,
-        doc="Final source measurement on low-threshold detections; dipole fitting enabled.",
-    )
+
     getTemplate = pexConfig.ConfigurableField(
         target = GetCoaddAsTemplateTask,
         doc = "Subtask to retrieve template exposure and sources",
@@ -131,11 +115,6 @@ class ImageDifferenceConfig(pexConfig.Config):
     templateSipOrder = pexConfig.Field(dtype=int, default=2,
         doc="Sip Order for fitting the Template Wcs (default is too high, overfitting)")
 
-    growFootprint = pexConfig.Field(dtype=int, default=2,
-        doc="Grow positive and negative footprints by this amount before merging")
-
-    diaSourceMatchRadius = pexConfig.Field(dtype=float, default=0.5,
-        doc="Match radius (in arcseconds) for DiaSource to Source association")
 
     def setDefaults(self):
         # Set default source selector and configure defaults for that one and some common alternatives
@@ -152,44 +131,11 @@ class ImageDifferenceConfig(pexConfig.Config):
         self.doAddMetrics = False
         self.doUseRegister = False
 
-        # DiaSource Detection
-        self.detection.thresholdPolarity = "both"
-        self.detection.thresholdValue = 5.5
-        self.detection.reEstimateBackground = False
-        self.detection.thresholdType = "pixel_stdev"
-
-        # Only run algorithms/plugins that make sense on an image difference
-        self.measurement.plugins = ["base_PsfFlux",
-                                    "base_CircularApertureFlux",
-                                    "ip_diffim_NaiveDipoleCentroid",
-                                    "ip_diffim_NaiveDipoleFlux",
-                                    "ip_diffim_PsfDipoleFlux",
-                                    "ip_diffim_ClassificationDipole",
-                                    "base_SkyCoord",
-                                    ]
-
-        self.measurement.slots.calibFlux = None
-        self.measurement.slots.modelFlux = None
-        self.measurement.slots.instFlux = None
-        self.measurement.slots.shape = None
-        self.measurement.slots.centroid = "ip_diffim_NaiveDipoleCentroid"
-        self.measurement.doReplaceWithNoise = False
-
-        # Add filtered flux measurement, the correct measurement for pre-convolved images.
-        # Enable all measurements, regardless of doPreConvolved, as it makes data harvesting easier.
-        # To change that you must modify algorithms.names in the task's applyOverrides method,
-        # after the user has set doPreConvolved.
-        self.measurement.algorithms.names.add('base_PeakLikelihoodFlux')
-
         # For shuffling the control sample
         random.seed(self.controlRandomSeed)
 
     def validate(self):
         pexConfig.Config.validate(self)
-        if self.doMeasurement and not self.doDetection:
-            raise ValueError("Cannot run source measurement without source detection.")
-        if self.doMerge and not self.doDetection:
-            raise ValueError("Cannot run source merging without source detection.")
         if self.doUseRegister and not self.doSelectSources:
             raise ValueError("doUseRegister=True and doSelectSources=False. " +
                              "Cannot run RegisterTask without selecting sources.")
@@ -220,16 +166,6 @@ class ImageDifferenceTask(pipeBase.CmdLineTask):
         if self.config.doSelectSources:
             self.sourceSelector = self.config.sourceSelector.apply()
             self.makeSubtask("astrometer")
-        self.schema = afwTable.SourceTable.makeMinimalSchema()
-        self.algMetadata = dafBase.PropertyList()
-        if self.config.doDetection:
-            self.makeSubtask("detection", schema=self.schema)
-        if self.config.doMeasurement:
-            self.makeSubtask("measurement", schema=self.schema,
-                             algMetadata=self.algMetadata)
-        if self.config.doMatchSources:
-            self.schema.addField("refMatchId", "L", "unique id of reference catalog match")
-            self.schema.addField("srcMatchId", "L", "unique id of source match")
 
     @pipeBase.timeMethod
     def run(self, sensorRef, templateIdList=None):
@@ -290,301 +226,220 @@ class ImageDifferenceTask(pipeBase.CmdLineTask):
             raise pipeBase.TaskError("Exposure has no psf")
         sciencePsf = exposure.getPsf()
 
-        subtractedExposureName = self.config.coaddName + "Diff_differenceExp"
         templateExposure = None  # Stitched coadd exposure
         templateSources = None   # Sources on the template image
-        if self.config.doSubtract:
-            template = self.getTemplate.run(exposure, sensorRef, templateIdList=templateIdList)
-            templateExposure = template.exposure
-            templateSources = template.sources
+        template = self.getTemplate.run(exposure, sensorRef, templateIdList=templateIdList)
+        templateExposure = template.exposure
+        templateSources = template.sources
 
-            # compute scienceSigmaOrig: sigma of PSF of science image before pre-convolution
-            ctr = afwGeom.Box2D(exposure.getBBox()).getCenter()
-            psfAttr = PsfAttributes(sciencePsf, afwGeom.Point2I(ctr))
-            scienceSigmaOrig = psfAttr.computeGaussianWidth(psfAttr.ADAPTIVE_MOMENT)
+        # compute scienceSigmaOrig: sigma of PSF of science image before pre-convolution
+        ctr = afwGeom.Box2D(exposure.getBBox()).getCenter()
+        psfAttr = PsfAttributes(sciencePsf, afwGeom.Point2I(ctr))
+        scienceSigmaOrig = psfAttr.computeGaussianWidth(psfAttr.ADAPTIVE_MOMENT)
 
-            # sigma of PSF of template image before warping
-            ctr = afwGeom.Box2D(templateExposure.getBBox()).getCenter()
-            psfAttr = PsfAttributes(templateExposure.getPsf(), afwGeom.Point2I(ctr))
-            templateSigma = psfAttr.computeGaussianWidth(psfAttr.ADAPTIVE_MOMENT)
+        # sigma of PSF of template image before warping
+        ctr = afwGeom.Box2D(templateExposure.getBBox()).getCenter()
+        psfAttr = PsfAttributes(templateExposure.getPsf(), afwGeom.Point2I(ctr))
+        templateSigma = psfAttr.computeGaussianWidth(psfAttr.ADAPTIVE_MOMENT)
 
-            # if requested, convolve the science exposure with its PSF
-            # (properly, this should be a cross-correlation, but our code does not yet support that)
-            # compute scienceSigmaPost: sigma of science exposure with pre-convolution, if done,
-            # else sigma of original science exposure
-            if self.config.doPreConvolve:
-                convControl = afwMath.ConvolutionControl()
-                # cannot convolve in place, so make a new MI to receive convolved image
-                srcMI = exposure.getMaskedImage()
-                destMI = srcMI.Factory(srcMI.getDimensions())
-                srcPsf = sciencePsf
-                if self.config.useGaussianForPreConvolution:
-                    # convolve with a simplified PSF model: a double Gaussian
-                    kWidth, kHeight = sciencePsf.getLocalKernel().getDimensions()
-                    preConvPsf = SingleGaussianPsf(kWidth, kHeight, scienceSigmaOrig)
-                else:
-                    # convolve with science exposure's PSF model
-                    preConvPsf = srcPsf
-                afwMath.convolve(destMI, srcMI, preConvPsf.getLocalKernel(), convControl)
-                exposure.setMaskedImage(destMI)
-                scienceSigmaPost = scienceSigmaOrig * math.sqrt(2)
+        # if requested, convolve the science exposure with its PSF
+        # (properly, this should be a cross-correlation, but our code does not yet support that)
+        # compute scienceSigmaPost: sigma of science exposure with pre-convolution, if done,
+        # else sigma of original science exposure
+        if self.config.doPreConvolve:
+            convControl = afwMath.ConvolutionControl()
+            # cannot convolve in place, so make a new MI to receive convolved image
+            srcMI = exposure.getMaskedImage()
+            destMI = srcMI.Factory(srcMI.getDimensions())
+            srcPsf = sciencePsf
+            if self.config.useGaussianForPreConvolution:
+                # convolve with a simplified PSF model: a double Gaussian
+                kWidth, kHeight = sciencePsf.getLocalKernel().getDimensions()
+                preConvPsf = SingleGaussianPsf(kWidth, kHeight, scienceSigmaOrig)
             else:
-                scienceSigmaPost = scienceSigmaOrig
+                # convolve with science exposure's PSF model
+                preConvPsf = srcPsf
+            afwMath.convolve(destMI, srcMI, preConvPsf.getLocalKernel(), convControl)
+            exposure.setMaskedImage(destMI)
+            scienceSigmaPost = scienceSigmaOrig * math.sqrt(2)
+        else:
+            scienceSigmaPost = scienceSigmaOrig
 
-            # If requested, find sources in the image
-            if self.config.doSelectSources:
-                if not sensorRef.datasetExists("src"):
-                    self.log.warn("Src product does not exist; running detection, measurement, selection")
-                    # Run own detection and measurement; necessary in nightly processing
-                    selectSources = self.subtract.getSelectSources(
-                        exposure,
-                        sigma = scienceSigmaPost,
-                        doSmooth = not self.doPreConvolve,
-                        idFactory = idFactory,
-                    )
-                else:
-                    self.log.info("Source selection via src product")
-                    # Sources already exist; for data release processing
-                    selectSources = sensorRef.get("src")
+        # If requested, find sources in the image
+        if self.config.doSelectSources:
+            if not sensorRef.datasetExists("src"):
+                self.log.warn("Src product does not exist; running detection, measurement, selection")
+                # Run own detection and measurement; necessary in nightly processing
+                selectSources = self.subtract.getSelectSources(
+                    exposure,
+                    sigma = scienceSigmaPost,
+                    doSmooth = not self.doPreConvolve,
+                    idFactory = idFactory,
+                )
+            else:
+                self.log.info("Source selection via src product")
+                # Sources already exist; for data release processing
+                selectSources = sensorRef.get("src")
 
-                # Number of basis functions
-                nparam = len(makeKernelBasisList(self.subtract.config.kernel.active,
-                                                 referenceFwhmPix=scienceSigmaPost * FwhmPerSigma,
-                                                 targetFwhmPix=templateSigma * FwhmPerSigma))
+            # Number of basis functions
+            nparam = len(makeKernelBasisList(self.subtract.config.kernel.active,
+                                             referenceFwhmPix=scienceSigmaPost * FwhmPerSigma,
+                                             targetFwhmPix=templateSigma * FwhmPerSigma))
 
-                if self.config.doAddMetrics:
-                    # Modify the schema of all Sources
-                    kcQa = KernelCandidateQa(nparam)
-                    selectSources = kcQa.addToSchema(selectSources)
+            if self.config.doAddMetrics:
+                # Modify the schema of all Sources
+                kcQa = KernelCandidateQa(nparam)
+                selectSources = kcQa.addToSchema(selectSources)
 
-                if self.config.kernelSourcesFromRef:
-                    # match exposure sources to reference catalog
-                    astromRet = self.astrometer.loadAndMatch(exposure=exposure, sourceCat=selectSources)
-                    matches = astromRet.matches
-                elif templateSources:
-                    # match exposure sources to template sources
-                    matches = afwTable.matchRaDec(templateSources, selectSources, 1.0*afwGeom.arcseconds,
-                                                  False)
-                else:
-                    raise RuntimeError("doSelectSources=True and kernelSourcesFromRef=False," +
-                                       "but template sources not available. Cannot match science " +
-                                       "sources with template sources. Run process* on data from " +
-                                       "which templates are built.")
+            if self.config.kernelSourcesFromRef:
+                # match exposure sources to reference catalog
+                astromRet = self.astrometer.loadAndMatch(exposure=exposure, sourceCat=selectSources)
+                matches = astromRet.matches
+            elif templateSources:
+                # match exposure sources to template sources
+                matches = afwTable.matchRaDec(templateSources, selectSources, 1.0*afwGeom.arcseconds,
+                                              False)
+            else:
+                raise RuntimeError("doSelectSources=True and kernelSourcesFromRef=False," +
+                                   "but template sources not available. Cannot match science " +
+                                   "sources with template sources. Run process* on data from " +
+                                   "which templates are built.")
 
-                if hasattr(self.sourceSelector, 'selectStars'):
-                    kernelSources = self.sourceSelector.selectStars(exposure, selectSources, matches=matches)
-                elif hasattr(self.sourceSelector, 'selectSources'):
-                    kernelSources = self.sourceSelector.selectSources(exposure, selectSources,
-                                                                      matches=matches)
-                else:
-                    raise RuntimeError("sourceSelector: %s has no selectStars() or selectSources() method." %
-                                       (type(self.sourceSelector)))
+            if hasattr(self.sourceSelector, 'selectStars'):
+                kernelSources = self.sourceSelector.selectStars(exposure, selectSources, matches=matches)
+            elif hasattr(self.sourceSelector, 'selectSources'):
+                kernelSources = self.sourceSelector.selectSources(exposure, selectSources,
+                                                                  matches=matches)
+            else:
+                raise RuntimeError("sourceSelector: %s has no selectStars() or selectSources() method." %
+                                   (type(self.sourceSelector)))
 
-                random.shuffle(kernelSources, random.random)
-                controlSources = kernelSources[::self.config.controlStepSize]
-                kernelSources = [k for i,k in enumerate(kernelSources) if i % self.config.controlStepSize]
+            random.shuffle(kernelSources, random.random)
+            controlSources = kernelSources[::self.config.controlStepSize]
+            kernelSources = [k for i,k in enumerate(kernelSources) if i % self.config.controlStepSize]
 
-                if self.config.doSelectDcrCatalog:
-                    redSelector  = DiaCatalogSourceSelector(
-                        DiaCatalogSourceSelectorConfig(grMin=self.sourceSelector.config.grMax, grMax=99.999))
-                    redSources   = redSelector.selectSources(exposure, selectSources, matches=matches)
-                    controlSources.extend(redSources)
+            if self.config.doSelectDcrCatalog:
+                redSelector  = DiaCatalogSourceSelector(
+                    DiaCatalogSourceSelectorConfig(grMin=self.sourceSelector.config.grMax, grMax=99.999))
+                redSources   = redSelector.selectSources(exposure, selectSources, matches=matches)
+                controlSources.extend(redSources)
 
-                    blueSelector = DiaCatalogSourceSelector(
-                        DiaCatalogSourceSelectorConfig(grMin=-99.999, grMax=self.sourceSelector.config.grMin))
-                    blueSources  = blueSelector.selectSources(exposure, selectSources, matches=matches)
-                    controlSources.extend(blueSources)
+                blueSelector = DiaCatalogSourceSelector(
+                    DiaCatalogSourceSelectorConfig(grMin=-99.999, grMax=self.sourceSelector.config.grMin))
+                blueSources  = blueSelector.selectSources(exposure, selectSources, matches=matches)
+                controlSources.extend(blueSources)
 
-                if self.config.doSelectVariableCatalog:
-                    varSelector = DiaCatalogSourceSelector(
-                        DiaCatalogSourceSelectorConfig(includeVariable=True))
-                    varSources  = varSelector.selectSources(exposure, selectSources, matches=matches)
-                    controlSources.extend(varSources)
+            if self.config.doSelectVariableCatalog:
+                varSelector = DiaCatalogSourceSelector(
+                    DiaCatalogSourceSelectorConfig(includeVariable=True))
+                varSources  = varSelector.selectSources(exposure, selectSources, matches=matches)
+                controlSources.extend(varSources)
 
-                self.log.info("Selected %d / %d sources for Psf matching (%d for control sample)" 
-                              % (len(kernelSources), len(selectSources), len(controlSources)))
-            allresids = {}
-            if self.config.doUseRegister:
-                self.log.info("Registering images")
+            self.log.info("Selected %d / %d sources for Psf matching (%d for control sample)" 
+                          % (len(kernelSources), len(selectSources), len(controlSources)))
+        allresids = {}
+        if self.config.doUseRegister:
+            self.log.info("Registering images")
 
-                if templateSources is None:
-                    # Run detection on the template, which is
-                    # temporarily background-subtracted
-                    templateSources = self.subtract.getSelectSources(
-                        templateExposure,
-                        sigma=templateSigma,
-                        doSmooth=True,
-                        idFactory=idFactory
-                    )
-
-                # Third step: we need to fit the relative astrometry.
-                #
-                wcsResults = self.fitAstrometry(templateSources, templateExposure, selectSources)
-                warpedExp = self.register.warpExposure(templateExposure, wcsResults.wcs,
-                                            exposure.getWcs(), exposure.getBBox())
-                templateExposure = warpedExp
-
-                # Create debugging outputs on the astrometric
-                # residuals as a function of position.  Persistence
-                # not yet implemented; expected on (I believe) #2636.
-                if self.config.doDebugRegister:
-                    # Grab matches to reference catalog
-                    srcToMatch = {x.second.getId() : x.first for x in matches}
-
-                    refCoordKey = wcsResults.matches[0].first.getTable().getCoordKey()
-                    inCentroidKey = wcsResults.matches[0].second.getTable().getCentroidKey()
-                    sids      = [m.first.getId() for m in wcsResults.matches]
-                    positions = [m.first.get(refCoordKey) for m in wcsResults.matches]
-                    residuals = [m.first.get(refCoordKey).getOffsetFrom(wcsResults.wcs.pixelToSky(
-                                m.second.get(inCentroidKey))) for m in wcsResults.matches]
-                    allresids = dict(zip(sids, zip(positions, residuals)))
-
-                    cresiduals = [m.first.get(refCoordKey).getTangentPlaneOffset(
-                            wcsResults.wcs.pixelToSky(
-                                m.second.get(inCentroidKey))) for m in wcsResults.matches]
-                    colors    = numpy.array([-2.5*numpy.log10(srcToMatch[x].get("g"))
-                                              + 2.5*numpy.log10(srcToMatch[x].get("r")) 
-                                              for x in sids if x in srcToMatch.keys()])
-                    dlong     = numpy.array([r[0].asArcseconds() for s,r in zip(sids, cresiduals) 
-                                             if s in srcToMatch.keys()])
-                    dlat      = numpy.array([r[1].asArcseconds() for s,r in zip(sids, cresiduals) 
-                                             if s in srcToMatch.keys()])
-                    idx1      = numpy.where(colors<self.sourceSelector.config.grMin)
-                    idx2      = numpy.where((colors>=self.sourceSelector.config.grMin)&
-                                            (colors<=self.sourceSelector.config.grMax))
-                    idx3      = numpy.where(colors>self.sourceSelector.config.grMax)
-                    rms1Long  = IqrToSigma*(numpy.percentile(dlong[idx1],75)-numpy.percentile(dlong[idx1],25))
-                    rms1Lat   = IqrToSigma*(numpy.percentile(dlat[idx1],75)-numpy.percentile(dlat[idx1],25))
-                    rms2Long  = IqrToSigma*(numpy.percentile(dlong[idx2],75)-numpy.percentile(dlong[idx2],25))
-                    rms2Lat   = IqrToSigma*(numpy.percentile(dlat[idx2],75)-numpy.percentile(dlat[idx2],25))
-                    rms3Long  = IqrToSigma*(numpy.percentile(dlong[idx3],75)-numpy.percentile(dlong[idx3],25))
-                    rms3Lat   = IqrToSigma*(numpy.percentile(dlat[idx3],75)-numpy.percentile(dlat[idx3],25))
-                    self.log.info("Blue star offsets'': %.3f %.3f, %.3f %.3f"  % (numpy.median(dlong[idx1]), 
-                                                                                  rms1Long,
-                                                                                  numpy.median(dlat[idx1]), 
-                                                                                  rms1Lat))
-                    self.log.info("Green star offsets'': %.3f %.3f, %.3f %.3f"  % (numpy.median(dlong[idx2]), 
-                                                                                   rms2Long,
-                                                                                   numpy.median(dlat[idx2]), 
-                                                                                   rms2Lat))
-                    self.log.info("Red star offsets'': %.3f %.3f, %.3f %.3f"  % (numpy.median(dlong[idx3]), 
-                                                                                 rms3Long,
-                                                                                 numpy.median(dlat[idx3]), 
-                                                                                 rms3Lat))
-
-                    self.metadata.add("RegisterBlueLongOffsetMedian", numpy.median(dlong[idx1]))
-                    self.metadata.add("RegisterGreenLongOffsetMedian", numpy.median(dlong[idx2]))
-                    self.metadata.add("RegisterRedLongOffsetMedian", numpy.median(dlong[idx3]))
-                    self.metadata.add("RegisterBlueLongOffsetStd", rms1Long)
-                    self.metadata.add("RegisterGreenLongOffsetStd", rms2Long)
-                    self.metadata.add("RegisterRedLongOffsetStd", rms3Long)
-
-                    self.metadata.add("RegisterBlueLatOffsetMedian", numpy.median(dlat[idx1]))
-                    self.metadata.add("RegisterGreenLatOffsetMedian", numpy.median(dlat[idx2]))
-                    self.metadata.add("RegisterRedLatOffsetMedian", numpy.median(dlat[idx3]))
-                    self.metadata.add("RegisterBlueLatOffsetStd", rms1Lat)
-                    self.metadata.add("RegisterGreenLatOffsetStd", rms2Lat)
-                    self.metadata.add("RegisterRedLatOffsetStd", rms3Lat)
-
-            # warp template exposure to match exposure,
-            # PSF match template exposure to exposure,
-            # then return the difference
-
-            #Return warped template...  Construct sourceKernelCand list after subtract
-            self.log.info("Subtracting images")
-            subtractRes = self.subtract.subtractExposures(
-                templateExposure=templateExposure,
-                scienceExposure=exposure,
-                candidateList=kernelSources,
-                convolveTemplate=self.config.convolveTemplate,
-                doWarping=not self.config.doUseRegister
-            )
-            subtractedExposure = subtractRes.subtractedExposure
-
-            if self.config.doWriteMatchedExp:
-                sensorRef.put(subtractRes.matchedExposure, self.config.coaddName + "Diff_matchedExp")
-
-        if self.config.doDetection:
-            self.log.info("Running diaSource detection")
-            if subtractedExposure is None:
-                subtractedExposure = sensorRef.get(subtractedExposureName)
-
-            # Get Psf from the appropriate input image if it doesn't exist
-            if not subtractedExposure.hasPsf():
-                if self.config.convolveTemplate:
-                    subtractedExposure.setPsf(exposure.getPsf())
-                else:
-                    if templateExposure is None:
-                        template = self.getTemplate.run(exposure, sensorRef, templateIdList=templateIdList)
-                    subtractedExposure.setPsf(template.exposure.getPsf())
-
-            # Erase existing detection mask planes
-            mask  = subtractedExposure.getMaskedImage().getMask()
-            mask &= ~(mask.getPlaneBitMask("DETECTED") | mask.getPlaneBitMask("DETECTED_NEGATIVE"))
-
-            table = afwTable.SourceTable.make(self.schema, idFactory)
-            table.setMetadata(self.algMetadata)
-            results = self.detection.makeSourceCatalog(
-                table=table,
-                exposure=subtractedExposure,
-                doSmooth=not self.config.doPreConvolve
+            if templateSources is None:
+                # Run detection on the template, which is
+                # temporarily background-subtracted
+                templateSources = self.subtract.getSelectSources(
+                    templateExposure,
+                    sigma=templateSigma,
+                    doSmooth=True,
+                    idFactory=idFactory
                 )
 
-            if self.config.doMerge:
-                fpSet = results.fpSets.positive
-                fpSet.merge(results.fpSets.negative, self.config.growFootprint,
-                            self.config.growFootprint, False)
-                diaSources = afwTable.SourceCatalog(table)
-                fpSet.makeSources(diaSources)
-                self.log.info("Merging detections into %d sources" % (len(diaSources)))
-            else:
-                diaSources = results.sources
+            # Third step: we need to fit the relative astrometry.
+            #
+            wcsResults = self.fitAstrometry(templateSources, templateExposure, selectSources)
+            warpedExp = self.register.warpExposure(templateExposure, wcsResults.wcs,
+                                        exposure.getWcs(), exposure.getBBox())
+            templateExposure = warpedExp
 
-            if self.config.doMeasurement:
-                self.log.info("Running diaSource measurement")
-                self.measurement.run(diaSources, subtractedExposure)
+            # Create debugging outputs on the astrometric
+            # residuals as a function of position.  Persistence
+            # not yet implemented; expected on (I believe) #2636.
+            if self.config.doDebugRegister:
+                # Grab matches to reference catalog
+                srcToMatch = {x.second.getId() : x.first for x in matches}
 
-            # Match with the calexp sources if possible
-            if self.config.doMatchSources:
-                if sensorRef.datasetExists("src"):
-                    # Create key,val pair where key=diaSourceId and val=sourceId
-                    matchRadAsec = self.config.diaSourceMatchRadius
-                    matchRadPixel = matchRadAsec / exposure.getWcs().pixelScale().asArcseconds()
+                refCoordKey = wcsResults.matches[0].first.getTable().getCoordKey()
+                inCentroidKey = wcsResults.matches[0].second.getTable().getCentroidKey()
+                sids      = [m.first.getId() for m in wcsResults.matches]
+                positions = [m.first.get(refCoordKey) for m in wcsResults.matches]
+                residuals = [m.first.get(refCoordKey).getOffsetFrom(wcsResults.wcs.pixelToSky(
+                            m.second.get(inCentroidKey))) for m in wcsResults.matches]
+                allresids = dict(zip(sids, zip(positions, residuals)))
 
-                    srcMatches = afwTable.matchXy(sensorRef.get("src"), diaSources, matchRadPixel, True)
-                    srcMatchDict = dict([(srcMatch.second.getId(), srcMatch.first.getId()) for 
-                                         srcMatch in srcMatches])
-                    self.log.info("Matched %d / %d diaSources to sources" % (len(srcMatchDict),
-                                                                             len(diaSources)))
-                else:
-                    self.log.warn("Src product does not exist; cannot match with diaSources")
-                    srcMatchDict = {}
+                cresiduals = [m.first.get(refCoordKey).getTangentPlaneOffset(
+                        wcsResults.wcs.pixelToSky(
+                            m.second.get(inCentroidKey))) for m in wcsResults.matches]
+                colors    = numpy.array([-2.5*numpy.log10(srcToMatch[x].get("g"))
+                                          + 2.5*numpy.log10(srcToMatch[x].get("r")) 
+                                          for x in sids if x in srcToMatch.keys()])
+                dlong     = numpy.array([r[0].asArcseconds() for s,r in zip(sids, cresiduals) 
+                                         if s in srcToMatch.keys()])
+                dlat      = numpy.array([r[1].asArcseconds() for s,r in zip(sids, cresiduals) 
+                                         if s in srcToMatch.keys()])
+                idx1      = numpy.where(colors<self.sourceSelector.config.grMin)
+                idx2      = numpy.where((colors>=self.sourceSelector.config.grMin)&
+                                        (colors<=self.sourceSelector.config.grMax))
+                idx3      = numpy.where(colors>self.sourceSelector.config.grMax)
+                rms1Long  = IqrToSigma*(numpy.percentile(dlong[idx1],75)-numpy.percentile(dlong[idx1],25))
+                rms1Lat   = IqrToSigma*(numpy.percentile(dlat[idx1],75)-numpy.percentile(dlat[idx1],25))
+                rms2Long  = IqrToSigma*(numpy.percentile(dlong[idx2],75)-numpy.percentile(dlong[idx2],25))
+                rms2Lat   = IqrToSigma*(numpy.percentile(dlat[idx2],75)-numpy.percentile(dlat[idx2],25))
+                rms3Long  = IqrToSigma*(numpy.percentile(dlong[idx3],75)-numpy.percentile(dlong[idx3],25))
+                rms3Lat   = IqrToSigma*(numpy.percentile(dlat[idx3],75)-numpy.percentile(dlat[idx3],25))
+                self.log.info("Blue star offsets'': %.3f %.3f, %.3f %.3f"  % (numpy.median(dlong[idx1]), 
+                                                                              rms1Long,
+                                                                              numpy.median(dlat[idx1]), 
+                                                                              rms1Lat))
+                self.log.info("Green star offsets'': %.3f %.3f, %.3f %.3f"  % (numpy.median(dlong[idx2]), 
+                                                                               rms2Long,
+                                                                               numpy.median(dlat[idx2]), 
+                                                                               rms2Lat))
+                self.log.info("Red star offsets'': %.3f %.3f, %.3f %.3f"  % (numpy.median(dlong[idx3]), 
+                                                                             rms3Long,
+                                                                             numpy.median(dlat[idx3]), 
+                                                                             rms3Lat))
 
-                # Create key,val pair where key=diaSourceId and val=refId
-                refAstromConfig = measAstrom.AstrometryConfig()
-                refAstromConfig.matcher.maxMatchDistArcSec = matchRadAsec
-                refAstrometer = measAstrom.AstrometryTask(refAstromConfig)
-                astromRet = refAstrometer.run(exposure=exposure, sourceCat=diaSources)
-                refMatches = astromRet.matches
-                if refMatches is None:
-                    self.log.warn("No diaSource matches with reference catalog")
-                    refMatchDict = {}
-                else:
-                    self.log.info("Matched %d / %d diaSources to reference catalog" % (len(refMatches),
-                                                                                       len(diaSources)))
-                    refMatchDict = dict([(refMatch.second.getId(), refMatch.first.getId()) for \
-                                             refMatch in refMatches])
+                self.metadata.add("RegisterBlueLongOffsetMedian", numpy.median(dlong[idx1]))
+                self.metadata.add("RegisterGreenLongOffsetMedian", numpy.median(dlong[idx2]))
+                self.metadata.add("RegisterRedLongOffsetMedian", numpy.median(dlong[idx3]))
+                self.metadata.add("RegisterBlueLongOffsetStd", rms1Long)
+                self.metadata.add("RegisterGreenLongOffsetStd", rms2Long)
+                self.metadata.add("RegisterRedLongOffsetStd", rms3Long)
 
-                # Assign source Ids
-                for diaSource in diaSources:
-                    sid = diaSource.getId()
-                    if srcMatchDict.has_key(sid):
-                        diaSource.set("srcMatchId", srcMatchDict[sid])
-                    if refMatchDict.has_key(sid):
-                        diaSource.set("refMatchId", refMatchDict[sid])
+                self.metadata.add("RegisterBlueLatOffsetMedian", numpy.median(dlat[idx1]))
+                self.metadata.add("RegisterGreenLatOffsetMedian", numpy.median(dlat[idx2]))
+                self.metadata.add("RegisterRedLatOffsetMedian", numpy.median(dlat[idx3]))
+                self.metadata.add("RegisterBlueLatOffsetStd", rms1Lat)
+                self.metadata.add("RegisterGreenLatOffsetStd", rms2Lat)
+                self.metadata.add("RegisterRedLatOffsetStd", rms3Lat)
 
-            if diaSources is not None and self.config.doWriteSources:
-                sensorRef.put(diaSources, self.config.coaddName + "Diff_diaSrc")
+        # warp template exposure to match exposure,
+        # PSF match template exposure to exposure,
+        # then return the difference
+
+        #Return warped template...  Construct sourceKernelCand list after subtract
+        self.log.info("Subtracting images")
+        subtractRes = self.subtract.subtractExposures(
+            templateExposure=templateExposure,
+            scienceExposure=exposure,
+            candidateList=kernelSources,
+            convolveTemplate=self.config.convolveTemplate,
+            doWarping=not self.config.doUseRegister
+        )
+        subtractedExposure = subtractRes.subtractedExposure
+
+        if self.config.doWriteMatchedExp:
+            sensorRef.put(subtractRes.matchedExposure, self.config.coaddName + "Diff_matchedExp")
+
+        # Measurement used to be here:
+
 
             if self.config.doAddMetrics and self.config.doSelectSources:
                 self.log.info("Evaluating metrics and control sample")
@@ -617,7 +472,7 @@ class ImageDifferenceTask(pipeBase.CmdLineTask):
                 sensorRef.put(selectSources, self.config.coaddName + "Diff_kernelSrc")
 
         if self.config.doWriteSubtractedExp:
-            sensorRef.put(subtractedExposure, subtractedExposureName)
+            sensorRef.put(subtractedExposure, self.config.coaddName + "Diff_differenceExp")
 
         self.runDebug(exposure, subtractRes, selectSources, kernelSources, diaSources)
         return pipeBase.Struct(
@@ -625,6 +480,7 @@ class ImageDifferenceTask(pipeBase.CmdLineTask):
             subtractRes=subtractRes,
             sources=diaSources,
         )
+
 
     def fitAstrometry(self, templateSources, templateExposure, selectSources):
         """Fit the relative astrometry between templateSources and selectSources
@@ -709,6 +565,9 @@ class ImageDifferenceTask(pipeBase.CmdLineTask):
                                             frame=lsstDebug.frame)
             lsstDebug.frame += 1
 
+
+
+
     def _getConfigName(self):
         """Return the name of the config dataset
         """
@@ -719,11 +578,6 @@ class ImageDifferenceTask(pipeBase.CmdLineTask):
         """
         return "%sDiff_metadata" % (self.config.coaddName,)
 
-    def getSchemaCatalogs(self):
-        """Return a dict of empty catalogs for each catalog dataset produced by this task."""
-        diaSrc = afwTable.SourceCatalog(self.schema)
-        diaSrc.getTable().setMetadata(self.algMetadata)
-        return {self.config.coaddName + "Diff_diaSrc": diaSrc}
 
     @classmethod
     def _makeArgumentParser(cls):
