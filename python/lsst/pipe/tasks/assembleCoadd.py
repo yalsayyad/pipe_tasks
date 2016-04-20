@@ -648,7 +648,7 @@ discussed in \ref pipeTasks_multiBand (but note that normally, one would use the
         \param[in] statsFlags: Statistic for coadd
         \param[in] statsCtrl: Statistics control object for coadd
         """
-        self.log.logdebug("Computing coadd over %s" % bbox)
+        self.log.debug("Computing coadd over %s" % bbox)
         tempExpName = self.getTempExpDatasetName()
         coaddMaskedImage = coaddExposure.getMaskedImage()
         maskedImageList = afwImage.vectorMaskedImageF() # [] is rejected by afwMath.statisticsStack

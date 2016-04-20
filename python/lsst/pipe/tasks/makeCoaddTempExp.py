@@ -173,7 +173,7 @@ class MakeCoaddTempExpTask(CoaddBaseTask):
                 numGoodPix = coaddUtils.copyGoodPixels(
                     coaddTempExp.getMaskedImage(), exposure.getMaskedImage(), self.getBadPixelMask())
                 totGoodPix += numGoodPix
-                self.log.logdebug("Calexp %s has %d good pixels in this patch (%.1f%%)" %
+                self.log.debug("Calexp %s has %d good pixels in this patch (%.1f%%)" %
                                   (calExpRef.dataId, numGoodPix, 100.0*numGoodPix/skyInfo.bbox.getArea()))
                 if numGoodPix > 0 and not didSetMetadata:
                     coaddTempExp.setCalib(exposure.getCalib())

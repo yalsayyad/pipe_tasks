@@ -357,14 +357,14 @@ into your debug.py file and run photoCalTask.py with the \c --debug flag.
         \throws ValueError There are no valid matches.
         """
 
-        self.log.logdebug("Number of input matches: %d" % (len(matches)))
+        self.log.debug("Number of input matches: %d" % (len(matches)))
         if len(matches) == 0:
             raise ValueError("No input matches")
 
         # Only use stars for which the flags indicate the photometry is good.
         afterFlagCutInd = [i for i, m in enumerate(matches) if checkSourceFlags(m.second, sourceKeys)]
         afterFlagCut = [matches[i] for i in afterFlagCutInd]
-        self.log.logdebug("Number of matches after source flag cuts: %d" % (len(afterFlagCut)))
+        self.log.debug("Number of matches after source flag cuts: %d" % (len(afterFlagCut)))
 
         if len(afterFlagCut) != len(matches):
             if frame is not None:
@@ -414,7 +414,7 @@ into your debug.py file and run photoCalTask.py with the \c --debug flag.
 
                 matches = afterRefCut
 
-        self.log.logdebug("Number of matches after reference catalog cuts: %d" % (len(matches)))
+        self.log.debug("Number of matches after reference catalog cuts: %d" % (len(matches)))
         if len(matches) == 0:
             raise RuntimeError("No sources remain in match list after reference catalog cuts.")
         fluxName = getRefFluxField(refSchema, filterName)
@@ -439,7 +439,7 @@ into your debug.py file and run photoCalTask.py with the \c --debug flag.
 
             matches = afterMagCut
 
-        self.log.logdebug("Number of matches after magnitude limit cuts: %d" % (len(matches)))
+        self.log.debug("Number of matches after magnitude limit cuts: %d" % (len(matches)))
 
         if len(matches) == 0:
             raise RuntimeError("No sources remaining in match list after magnitude limit cuts.")
@@ -772,7 +772,7 @@ into your debug.py file and run photoCalTask.py with the \c --debug flag.
                     if sigmaMax is None:
                         sigmaMax = 2*sig   # upper bound on st. dev. for clipping. multiplier is a heuristic
 
-                    self.log.logdebug("Photo calibration histogram: center = %.2f, sig = %.2f"
+                    self.log.debug("Photo calibration histogram: center = %.2f, sig = %.2f"
                                       % (center, sig))
 
                 else:
