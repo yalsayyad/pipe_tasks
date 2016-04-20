@@ -33,7 +33,7 @@ import lsst.utils.tests as utilsTests
 import lsst.afw.detection as afwDetection
 import lsst.afw.image   as afwImage
 import lsst.afw.table   as afwTable
-import lsst.pex.logging as pexLog
+import lsst.log
 
 import testFindAstrometryNetDataDir as helper
 
@@ -68,7 +68,7 @@ class TestForceWcs(unittest.TestCase):
         meas = SingleFrameMeasurementTask(schema, config=mconf)
         astrom = ANetAstrometryTask(schema, config=aconf, name='astrom')
 
-        astrom.log.setThreshold(pexLog.Log.DEBUG)
+        lsst.log.Log.setLevel('astrom', lsst.log.Log.DEBUG)
 
         inwcs = exposure.getWcs()
         print 'inwcs:', inwcs

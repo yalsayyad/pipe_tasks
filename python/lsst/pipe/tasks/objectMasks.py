@@ -1,6 +1,6 @@
 import re
 import lsst.daf.base as dafBase
-import lsst.pex.logging as pexLog
+import lsst.log
 import lsst.afw.coord as afwCoord
 import lsst.afw.geom as afwGeom
 import lsst.afw.table as afwTable
@@ -64,7 +64,7 @@ class ObjectMaskCatalog(object):
         currently.
         """
 
-        log = pexLog.getDefaultLog().createChildLog("ObjectMaskCatalog")
+        log = lsst.log.Log.getLogger("ObjectMaskCatalog")
 
         brightObjects = ObjectMaskCatalog()
         checkedWcsIsFk5 = False
