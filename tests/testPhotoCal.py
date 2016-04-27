@@ -32,15 +32,15 @@ import lsst.afw.geom               as afwGeom
 import lsst.afw.table              as afwTable
 import lsst.afw.image              as afwImage
 import lsst.utils.tests            as utilsTests
-from lsst.pex.logging import Log
+from lsst.log import Log
 from lsst.pipe.tasks.photoCal import PhotoCalTask, PhotoCalConfig
 
 import testFindAstrometryNetDataDir as helper
 
 # Quiet down meas_astrom logging, so we can see PhotoCal logs better
-Log(Log.getDefaultLog(), "meas.astrom.astrometry_net", Log.WARN)
-Log(Log.getDefaultLog(), "meas.astrom.sip", Log.WARN)
-Log(Log.getDefaultLog(), "astrometricSolver", Log.WARN)
+Log.setLevel("meas.astrom.astrometry_net", Log.WARN)
+Log.setLevel("meas.astrom.sip", Log.WARN)
+Log.setLevel("astrometricSolver", Log.WARN)
 
 class PhotoCalTest(unittest.TestCase):
 
@@ -91,9 +91,8 @@ class PhotoCalTest(unittest.TestCase):
         print 'Test1'
 
         logLevel = Log.DEBUG
-        log = Log(Log.getDefaultLog(),
-                  'testPhotoCal',
-                  logLevel)
+        log = Log.getLogger('testPhotoCal')
+        Log.setLevel(log, logLevel)
 
         schema = matches[0].second.schema
 
